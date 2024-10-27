@@ -1,0 +1,41 @@
+{
+	"schemaVersion": 1,
+	"id": "denorite",
+	"version": "${version}",
+	"name": "Denorite",
+	"description": "Powerful server-side scripting interface for Minecraft. Create custom commands, handle events, and extend functionality with secure Deno scripts.",
+	"authors": [
+		"Me!"
+	],
+	"contact": {
+		"homepage": "https://fabricmc.net/",
+		"sources": "https://github.com/FabricMC/fabric-example-mod"
+	},
+	"license": "CC0-1.0",
+	"icon": "assets/denorite/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.denorite.Denorite"
+		],
+		"client": [
+			"com.denorite.DenoriteClient"
+		]
+	},
+	"mixins": [
+		"denorite.mixins.json",
+		{
+			"config": "denorite.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.16.7",
+		"minecraft": "~1.20.4",
+		"java": ">=17",
+		"fabric-api": "*"
+	},
+	"suggests": {
+		"another-mod": "*"
+	}
+}
