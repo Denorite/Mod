@@ -12,15 +12,15 @@ A Fabric mod that connects Minecraft servers to TypeScript applications through 
 
 ## Requirements
 
-- Minecraft 1.20.x
-- Fabric Loader 0.15.x
+- Minecraft 1.20.x+
+- Fabric Loader 0.15.x+
 - Fabric API 0.91.x+
-- [Denorite Server](https://github.com/yourusername/denorite-server) running
+- [Denorite Server](https://github.com/denorite/server) running
 
 ## Installation
 
 1. Install Fabric for your Minecraft server
-2. Download the latest Denorite mod release
+2. Download the latest Denorite mod release for your Minecraft version
 3. Place the mod in your server's `mods` folder
 4. Create a configuration file at `config/denorite.json`:
 
@@ -152,7 +152,7 @@ The mod provides comprehensive integration with BlueMap for dynamic marker manag
 
 ## Event System
 
-The mod broadcasts various events through WebSocket. Each event includes relevant data in JSON format. See the [Denorite Server documentation](https://github.com/yourusername/denorite-server) for a complete list of events.
+The mod broadcasts various events through WebSocket. Each event includes relevant data in JSON format. See the [Denorite Server documentation](https://github.com/denorite/server) for a complete list of events.
 
 ## Security
 
@@ -180,4 +180,4 @@ The mod implements security through:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the Creative Commons Attribution-NonCommercial License - see the LICENSE file for details.
