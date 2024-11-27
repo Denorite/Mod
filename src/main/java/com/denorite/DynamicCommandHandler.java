@@ -84,7 +84,7 @@ public class DynamicCommandHandler {
                 jsonArray.add(commandData);
             }
             gson.toJson(jsonArray, writer);
-            Denorite.LOGGER.info("Saved " + registeredCommands.size() + " custom commands");
+//            Denorite.LOGGER.info("Saved " + registeredCommands.size() + " custom commands");
         } catch (IOException e) {
             Denorite.LOGGER.error("Error saving commands: " + e.getMessage());
         }
@@ -219,7 +219,7 @@ public class DynamicCommandHandler {
                 Denorite.LOGGER.info("Command already exists with same structure, maintaining registration: " + name);
             }
         } else {
-            Denorite.LOGGER.warn("Server not initialized. Command will be registered on next server start: " + name);
+            Denorite.LOGGER.warn("Server not yet initialized. Command will be registered on next server start: " + name);
         }
     }
 

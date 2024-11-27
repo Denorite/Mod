@@ -1,11 +1,45 @@
 package com.denorite;
 
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.block.*;
+import net.minecraft.util.Identifier;
+import net.fabricmc.fabric.api.loot.v2.LootTableEvents;
+import net.fabricmc.fabric.api.entity.event.v1.ServerEntityCombatEvents;
+import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerWorldEvents;
+import net.minecraft.entity.projectile.ProjectileEntity;
+import net.minecraft.item.ItemStack;
+import net.minecraft.entity.ItemEntity;
+import com.google.gson.JsonArray;
+import net.minecraft.screen.ScreenHandler;
+import net.minecraft.inventory.Inventory;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.entity.projectile.ArrowEntity;
+import net.minecraft.util.hit.EntityHitResult;
+import net.minecraft.advancement.AdvancementProgress;
+import net.minecraft.advancement.AdvancementEntry;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.util.hit.HitResult;
+import net.minecraft.resource.ResourceManager;
+import net.minecraft.loot.LootManager;
+import net.minecraft.loot.LootTable;
+import net.minecraft.loot.context.LootContextTypes;
+import net.minecraft.loot.provider.number.ConstantLootNumberProvider;
+import net.minecraft.loot.provider.number.UniformLootNumberProvider;
+import net.minecraft.loot.condition.LootCondition;
+import net.minecraft.loot.function.LootFunction;
+import net.minecraft.loot.entry.ItemEntry;
+import net.minecraft.loot.entry.LootPoolEntry;
+import net.minecraft.inventory.SimpleInventory;
+
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.entity.event.v1.*;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
@@ -24,10 +58,11 @@ import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.TypedActionResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.block.BlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.item.ItemStack;
+import net.minecraft.util.math.Vec2f;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.Chunk;
 import org.slf4j.Logger;
@@ -35,9 +70,8 @@ import org.slf4j.LoggerFactory;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.damage.DamageTracker;
 import net.minecraft.screen.ScreenHandler;
-import net.minecraft.block.Block;
-import net.minecraft.block.Blocks;
 import net.minecraft.advancement.AdvancementEntry;
+import de.bluecolored.bluemap.api.BlueMapAPI;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -53,8 +87,8 @@ public class Denorite implements ModInitializer {
 	private static WebSocket webSocket;
 	private static final Gson gson = new Gson();
 	static MinecraftServer server;
-	private static boolean strictMode = false;
-	private static final int RECONNECT_DELAY = 100;
+	private static boolean strictMode = true;
+	private static final int RECONNECT_DELAY = 1000;
 
 	private DenoriteConfig config;
 
@@ -64,9 +98,11 @@ public class Denorite implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		LOGGER.info("Initializing Denorite");
+//		DenoriteBanner.printBanner();
 		config = new DenoriteConfig();
 		initializeWebSocket();
 		DynamicCommandHandler.initialize();
+		BlueMapIntegration.initialize();
 		ServerLifecycleEvents.SERVER_STARTING.register(this::setServer);
 		ServerLifecycleEvents.SERVER_STOPPING.register(this::unsetServer);
 		registerAllEvents();
@@ -101,6 +137,7 @@ public class Denorite implements ModInitializer {
 						@Override
 						public void onOpen(WebSocket webSocket) {
 							LOGGER.info("Connected to Denorite Server");
+							DenoriteBanner.printBanner();
 							Denorite.webSocket = webSocket;
 							DynamicCommandHandler.handleReconnect();
 							WebSocket.Listener.super.onOpen(webSocket);
@@ -157,9 +194,14 @@ public class Denorite implements ModInitializer {
 		registerPlayerEvents();
 		registerEntityEvents();
 		registerWorldEvents();
-		registerBlockEvents();
 		registerItemEvents();
 		registerChatEvents();
+		registerProjectileEvents();
+		registerAdvancementEvents();
+		registerExperienceEvents();
+		registerTradeEvents();
+		registerWeatherEvents();
+		registerRedstoneEvents();
 	}
 
 	public static void onContainerClose(ServerPlayerEntity player, ScreenHandler handler) {
@@ -180,10 +222,32 @@ public class Denorite implements ModInitializer {
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> sendToTypeScript("server_started", null));
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> sendToTypeScript("server_stopping", null));
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> sendToTypeScript("server_stopped", null));
+		ServerTickEvents.START_SERVER_TICK.register((server) -> sendToTypeScript("server_tick_start", null));
+		ServerTickEvents.END_SERVER_TICK.register((server) -> sendToTypeScript("server_tick_end", null));
 
-//		ServerTickEvents.START_SERVER_TICK.register((server) -> sendToTypeScript("server_tick_start", null));
-//		ServerTickEvents.END_SERVER_TICK.register((server) -> sendToTypeScript("server_tick_end", null));
-	}
+		ServerLifecycleEvents.BEFORE_SAVE.register((server, srt, str) ->
+				sendToTypeScript("server_before_save", null));
+
+		ServerLifecycleEvents.AFTER_SAVE.register((server, srt, str) ->
+				sendToTypeScript("server_after_save", null));
+
+		ServerLifecycleEvents.START_DATA_PACK_RELOAD.register((server, resourceManager) ->
+				sendToTypeScript("data_pack_reload_start", null));
+
+		ServerLifecycleEvents.END_DATA_PACK_RELOAD.register((server, resourceManager, success) -> {
+			JsonObject data = new JsonObject();
+			data.addProperty("success", success);
+			sendToTypeScript("data_pack_reload_end", data);
+		});
+
+		ServerLifecycleEvents.SYNC_DATA_PACK_CONTENTS.register((player, joined) -> {
+			JsonObject data = new JsonObject();
+			data.addProperty("playerId", player.getUuidAsString());
+			data.addProperty("playerName", player.getName().getString());
+			data.addProperty("joined", joined);
+			sendToTypeScript("data_pack_sync", data);
+		});
+;	}
 
 	private void registerPlayerEvents() {
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> {
@@ -194,6 +258,22 @@ public class Denorite implements ModInitializer {
 				sendToTypeScript("player_joined", serializePlayer(handler.getPlayer())));
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
 				sendToTypeScript("player_left", serializePlayer(handler.getPlayer())));
+
+		ServerPlayConnectionEvents.INIT.register((handler, server) -> {
+			JsonObject data = new JsonObject();
+			data.addProperty("playerId", handler.player.getUuidAsString());
+			data.addProperty("playerName", handler.player.getName().getString());
+			sendToTypeScript("player_connection_init", data);
+		});
+
+		PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, blockEntity) -> {
+			sendToTypeScript("player_break_block_before", serializeBlockEvent((ServerPlayerEntity)player, pos, state));
+			return true;
+		});
+
+		PlayerBlockBreakEvents.CANCELED.register((world, player, pos, state, blockEntity) -> {
+			sendToTypeScript("player_break_block_canceled", serializeBlockEvent((ServerPlayerEntity)player, pos, state));
+		});
 
 		ServerEntityCombatEvents.AFTER_KILLED_OTHER_ENTITY.register((world, entity, killedEntity) -> {
 			if (killedEntity instanceof ServerPlayerEntity) {
@@ -222,9 +302,8 @@ public class Denorite implements ModInitializer {
 				return ActionResult.PASS;
 			}
 
-			if (player instanceof ServerPlayerEntity) {
-				ServerPlayerEntity serverPlayer = (ServerPlayerEntity) player;
-				BlockPos pos = hitResult.getBlockPos();
+			if (player instanceof ServerPlayerEntity serverPlayer) {
+                BlockPos pos = hitResult.getBlockPos();
 				lastInteractedBlock = block;
 				lastInteractedPos = pos;
 				sendToTypeScript("container_interaction_start", serializeContainerInteraction(serverPlayer, block, pos));
@@ -277,11 +356,11 @@ public class Denorite implements ModInitializer {
 	}
 
 	private void registerWorldEvents() {
-//		ServerTickEvents.START_WORLD_TICK.register((world) ->
-//				sendToTypeScript("world_tick_start", serializeWorld(world)));
+		ServerTickEvents.START_WORLD_TICK.register((world) ->
+				sendToTypeScript("world_tick_start", serializeWorld(world)));
 
-//		ServerTickEvents.END_WORLD_TICK.register((world) ->
-//				sendToTypeScript("world_tick_end", serializeWorld(world)));
+		ServerTickEvents.END_WORLD_TICK.register((world) ->
+				sendToTypeScript("world_tick_end", serializeWorld(world)));
 
 		ServerWorldEvents.LOAD.register((server, world) ->
 				sendToTypeScript("world_load", serializeWorld(world)));
@@ -290,12 +369,19 @@ public class Denorite implements ModInitializer {
 				sendToTypeScript("world_unload", serializeWorld(world)));
 	}
 
-	private void registerBlockEvents() {
-		// Most block events are covered in player events, but you can add more specific ones here
-	}
-
 	private void registerItemEvents() {
-		// Most item events are covered in player events, but you can add more specific ones here
+		ServerPlayNetworking.registerGlobalReceiver(new Identifier("minecraft:click_slot"), (server, player, handler, buf, responseSender) -> {
+			sendToTypeScript("inventory_slot_click", serializeInventoryChange(player));
+		});
+
+		// Track item drops
+		ServerPlayNetworking.registerGlobalReceiver(new Identifier("minecraft:drop_item"), (server, player, handler, buf, responseSender) -> {
+			ItemStack droppedItem = player.getMainHandStack();
+			JsonObject data = new JsonObject();
+			data.addProperty("playerId", player.getUuidAsString());
+			data.add("item", serializeItemStack(droppedItem));
+			sendToTypeScript("item_dropped", data);
+		});
 	}
 
 	private void registerChatEvents() {
@@ -303,11 +389,126 @@ public class Denorite implements ModInitializer {
 			sendToTypeScript("player_chat", serializeChat(sender, message.getContent().getString()));
 		});
 
-		ServerMessageEvents.COMMAND_MESSAGE.register((message, source, params) -> {
-			if (source.getPlayer() != null) {
-				sendToTypeScript("player_command", serializeCommand(source.getPlayer(), String.valueOf(message)));
+		ServerMessageEvents.COMMAND_MESSAGE.register((message, sender, params) -> {
+			JsonObject data = new JsonObject();
+			if (sender.getPlayer() != null) {
+				data.addProperty("playerId", sender.getPlayer().getUuidAsString());
+				data.addProperty("playerName", sender.getPlayer().getName().getString());
+			}
+			data.addProperty("message", message.getContent().getString());
+			sendToTypeScript("command_message", data);
+		});
+
+//		ServerMessageEvents.GAME_MESSAGE.register((message, overlay) -> {
+//			if (message instanceof Text text) {
+//				JsonObject data = new JsonObject();
+//				data.addProperty("message", text.getString());
+//				sendToTypeScript("game_message", data);
+//			}
+//		});
+	}
+
+	private void registerProjectileEvents() {
+		// Track arrow hits and other projectiles
+		ServerEntityCombatEvents.AFTER_KILLED_OTHER_ENTITY.register((world, entity, killed) -> {
+			if (entity instanceof ProjectileEntity projectile) {
+				Entity owner = projectile.getOwner();
+				JsonObject data = new JsonObject();
+				data.addProperty("projectileType", projectile.getType().toString());
+				if (owner != null) {
+					data.addProperty("ownerId", owner.getUuidAsString());
+					data.addProperty("ownerType", owner.getType().toString());
+				}
+				data.add("target", serializeEntity(killed));
+				sendToTypeScript("projectile_kill", data);
 			}
 		});
+	}
+
+
+	private void registerAdvancementEvents() {
+		// Track advancement progress
+		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> {
+			for (AdvancementEntry advancement : server.getAdvancementLoader().getAdvancements()) {
+				AdvancementProgress progress = newPlayer.getAdvancementTracker().getProgress(advancement);
+				if (progress.isDone()) {
+					sendToTypeScript("advancement_complete", serializeAdvancement(newPlayer, advancement));
+				}
+			}
+		});
+	}
+
+	private void registerExperienceEvents() {
+		// Track XP changes
+		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+				int currentXp = player.experienceLevel;
+				int currentProgress = (int)(player.experienceProgress * 100);
+				JsonObject data = new JsonObject();
+				data.addProperty("playerId", player.getUuidAsString());
+				data.addProperty("level", currentXp);
+				data.addProperty("progress", currentProgress);
+				sendToTypeScript("experience_update", data);
+			}
+		});
+	}
+
+	private void registerTradeEvents() {
+		// Track villager trades
+		UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+			if (entity instanceof net.minecraft.village.Merchant) {
+				JsonObject data = new JsonObject();
+				data.addProperty("playerId", player.getUuidAsString());
+				data.addProperty("merchantId", entity.getUuidAsString());
+				data.addProperty("merchantType", entity.getType().toString());
+				sendToTypeScript("merchant_interaction", data);
+			}
+			return ActionResult.PASS;
+		});
+	}
+
+	private void registerWeatherEvents() {
+		// Track weather changes
+		ServerTickEvents.START_WORLD_TICK.register(world -> {
+			JsonObject data = new JsonObject();
+			data.addProperty("dimension", world.getRegistryKey().getValue().toString());
+			data.addProperty("isRaining", world.isRaining());
+			data.addProperty("isThundering", world.isThundering());
+			data.addProperty("rainGradient", world.getRainGradient(1.0F));
+			sendToTypeScript("weather_update", data);
+		});
+	}
+
+	private void registerRedstoneEvents() {
+		// Track redstone signal changes
+		AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
+			BlockState state = world.getBlockState(pos);
+			if (state.getBlock() instanceof RedstoneWireBlock ||
+					state.getBlock() instanceof AbstractRedstoneGateBlock) {
+				JsonObject data = new JsonObject();
+				data.addProperty("x", pos.getX());
+				data.addProperty("y", pos.getY());
+				data.addProperty("z", pos.getZ());
+				data.addProperty("power", state.get(RedstoneWireBlock.POWER));
+				sendToTypeScript("redstone_update", data);
+			}
+			return ActionResult.PASS;
+		});
+	}
+
+	// New serialization helpers
+	private JsonObject serializeAdvancement(ServerPlayerEntity player, AdvancementEntry advancement) {
+		JsonObject data = new JsonObject();
+		data.addProperty("playerId", player.getUuidAsString());
+		data.addProperty("playerName", player.getName().getString());
+		data.addProperty("advancementId", advancement.id().toString());
+		data.addProperty("title", advancement.value().display().toString());
+		return data;
+	}
+
+
+	private String serializeText(Text text) {
+		return text != null ? text.getString() : "";
 	}
 
 	// Serialization methods
@@ -453,6 +654,18 @@ public class Denorite implements ModInitializer {
 		return data;
 	}
 
+	private JsonObject serializeCommandMessage(Text message, ServerCommandSource source) {
+		JsonObject data = new JsonObject();
+		ServerPlayerEntity player = source.getPlayer();
+		if (player != null) {
+			data.addProperty("playerId", player.getUuidAsString());
+			data.addProperty("playerName", player.getName().getString());
+		}
+		data.addProperty("message", message.getString());
+		data.addProperty("command", source.getName());
+		return data;
+	}
+
 	private JsonObject serializeAdvancementCriterion(ServerPlayerEntity player, AdvancementEntry advancement, String criterion) {
 		JsonObject data = new JsonObject();
 		data.addProperty("playerId", player.getUuidAsString());
@@ -497,13 +710,39 @@ public class Denorite implements ModInitializer {
 		return data;
 	}
 
+	private JsonObject serializeScreenInteraction(ServerPlayerEntity player) {
+		JsonObject data = new JsonObject();
+		data.addProperty("playerId", player.getUuidAsString());
+		data.addProperty("playerName", player.getName().getString());
+		data.addProperty("currentScreen", player.currentScreenHandler.getClass().getSimpleName());
+		return data;
+	}
+
+	private JsonObject serializeInventoryChange(ServerPlayerEntity player) {
+		JsonObject data = new JsonObject();
+		data.addProperty("playerId", player.getUuidAsString());
+		data.addProperty("playerName", player.getName().getString());
+
+		JsonArray inventory = new JsonArray();
+		for (int i = 0; i < player.getInventory().size(); i++) {
+			ItemStack stack = player.getInventory().getStack(i);
+			if (!stack.isEmpty()) {
+				JsonObject item = serializeItemStack(stack);
+				item.addProperty("slot", i);
+				inventory.add(item);
+			}
+		}
+		data.add("inventory", inventory);
+
+		return data;
+	}
+
 	public static void sendToTypeScript(String eventType, JsonObject data) {
 		if (webSocket != null) {
 			JsonObject jsonMessage = new JsonObject();
 			jsonMessage.addProperty("eventType", eventType);
 			jsonMessage.add("data", data);
 			String message = jsonMessage.toString();
-			LOGGER.info("← " + message);
 			webSocket.sendText(message, true);
 		} else {
 			LOGGER.warn("WebSocket is null, cannot send message to Denorite: " + eventType);
@@ -520,7 +759,7 @@ public class Denorite implements ModInitializer {
 			JsonObject response = new JsonObject();
 			response.addProperty("id", id);
 
-			LOGGER.info("→ " + message);
+//			LOGGER.info("→ " + message);
 
 			try {
 				String result = "";
@@ -528,9 +767,17 @@ public class Denorite implements ModInitializer {
 					case "command":
 						result = executeCommand(dataElement.getAsString());
 						break;
+					case "setblock":
+						LOGGER.info(jsonMessage.toString());
+						result = SetBlockCommand.execute(server, dataElement.getAsJsonObject());
+						break;
 					case "chat":
 						broadcastMessage(dataElement.getAsString());
 						result = "Message broadcasted";
+						break;
+					case "bluemap":
+						BlueMapIntegration.handleMarkerCommand(dataElement.getAsJsonObject());
+						result = "Bluemap marker command executed";
 						break;
 					case "register_command":
 						DynamicCommandHandler.confirmReconnect();
@@ -551,7 +798,6 @@ public class Denorite implements ModInitializer {
 						result = "Error: Unknown message type";
 				}
 				response.addProperty("result", result);
-				LOGGER.info("Command executed. Result: " + result);
 			} catch (Exception e) {
 				LOGGER.error("Error executing command: " + e.getMessage());
 				response.addProperty("error", e.getMessage());
@@ -559,11 +805,12 @@ public class Denorite implements ModInitializer {
 
 			if (webSocket != null) {
 				String responseString = response.toString();
-				LOGGER.info("Sending response: " + responseString);
+//				LOGGER.info("← " + responseString);
 				webSocket.sendText(responseString, true);
 			}
 		} catch (Exception e) {
 			LOGGER.error("Error handling incoming message: " + e.getMessage());
+			LOGGER.error(message);
 		}
 	}
 
@@ -594,6 +841,9 @@ public class Denorite implements ModInitializer {
 				});
 
 				server.getCommandManager().executeWithPrefix(source, command);
+
+				LOGGER.info(command);
+
 				return output.toString().trim();
 			} catch (Exception e) {
 				LOGGER.error("Error executing command: " + e.getMessage());
@@ -601,6 +851,33 @@ public class Denorite implements ModInitializer {
 			}
 		}
 		return "Error: Server is null";
+	}
+
+	/**
+	 * Execute a command using ServerWorld's command execution
+	 */
+	public static void executeWorldCommand(ServerWorld world, BlockPos pos, String command) {
+		world.getServer().getCommandManager().executeWithPrefix(
+				createCommandSource(world, pos),
+				command
+		);
+	}
+
+	/**
+	 * Create a command source at a specific position
+	 */
+	private static ServerCommandSource createCommandSource(ServerWorld world, BlockPos pos) {
+		return new ServerCommandSource(
+				world.getServer(),
+				new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5),
+				Vec2f.ZERO,
+				world,
+				2, // Command level (2 is for command blocks)
+				"CommandBlock",
+				Text.literal("CommandBlock"),
+				world.getServer(),
+				null
+		);
 	}
 
 	private void broadcastMessage(String message) {
