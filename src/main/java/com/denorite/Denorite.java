@@ -1,45 +1,23 @@
 package com.denorite;
 
+import com.google.gson.*;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.block.*;
 import net.minecraft.util.Identifier;
-import net.fabricmc.fabric.api.loot.v2.LootTableEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerEntityCombatEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerWorldEvents;
 import net.minecraft.entity.projectile.ProjectileEntity;
 import net.minecraft.item.ItemStack;
-import net.minecraft.entity.ItemEntity;
-import com.google.gson.JsonArray;
 import net.minecraft.screen.ScreenHandler;
-import net.minecraft.inventory.Inventory;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.minecraft.entity.projectile.ArrowEntity;
-import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.advancement.AdvancementProgress;
 import net.minecraft.advancement.AdvancementEntry;
 import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.resource.ResourceManager;
-import net.minecraft.loot.LootManager;
-import net.minecraft.loot.LootTable;
-import net.minecraft.loot.context.LootContextTypes;
-import net.minecraft.loot.provider.number.ConstantLootNumberProvider;
-import net.minecraft.loot.provider.number.UniformLootNumberProvider;
-import net.minecraft.loot.condition.LootCondition;
-import net.minecraft.loot.function.LootFunction;
-import net.minecraft.loot.entry.ItemEntry;
-import net.minecraft.loot.entry.LootPoolEntry;
-import net.minecraft.inventory.SimpleInventory;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.entity.event.v1.*;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
@@ -48,11 +26,9 @@ import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerWorldEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandOutput;
 import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
@@ -60,7 +36,6 @@ import net.minecraft.util.TypedActionResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.damage.DamageSource;
-import net.minecraft.item.ItemStack;
 import net.minecraft.util.math.Vec2f;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
@@ -69,9 +44,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.damage.DamageTracker;
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.advancement.AdvancementEntry;
-import de.bluecolored.bluemap.api.BlueMapAPI;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -83,6 +55,8 @@ import java.util.concurrent.TimeUnit;
 public class Denorite implements ModInitializer {
 	public static final String MOD_ID = "Denorite";
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+	private static final StringBuffer messageBuffer = new StringBuffer();
+	private static final Object bufferLock = new Object();
 
 	private static WebSocket webSocket;
 	private static final Gson gson = new Gson();
@@ -102,6 +76,7 @@ public class Denorite implements ModInitializer {
 		config = new DenoriteConfig();
 		initializeWebSocket();
 		DynamicCommandHandler.initialize();
+		FileSystemHandler.initialize();
 		BlueMapIntegration.initialize();
 		ServerLifecycleEvents.SERVER_STARTING.register(this::setServer);
 		ServerLifecycleEvents.SERVER_STOPPING.register(this::unsetServer);
@@ -145,7 +120,21 @@ public class Denorite implements ModInitializer {
 
 						@Override
 						public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
-							handleIncomingMessage(data.toString());
+							synchronized (bufferLock) {
+								messageBuffer.append(data);
+
+								if (last) {
+									try {
+										String completeMessage = messageBuffer.toString();
+										handleIncomingMessage(completeMessage);
+									} catch (Exception e) {
+										LOGGER.error("Error processing complete message: " + e.getMessage());
+										LOGGER.error("Message content: " + messageBuffer.toString());
+									} finally {
+										messageBuffer.setLength(0); // Clear the buffer
+									}
+								}
+							}
 							return WebSocket.Listener.super.onText(webSocket, data, last);
 						}
 
@@ -194,7 +183,6 @@ public class Denorite implements ModInitializer {
 		registerPlayerEvents();
 		registerEntityEvents();
 		registerWorldEvents();
-		registerItemEvents();
 		registerChatEvents();
 		registerProjectileEvents();
 		registerAdvancementEvents();
@@ -215,6 +203,169 @@ public class Denorite implements ModInitializer {
 	private boolean shouldBeLogged(Block block) {
 		return block == Blocks.CHEST || block == Blocks.TRAPPED_CHEST || block == Blocks.ENDER_CHEST
 				|| block == Blocks.BARREL || block == Blocks.SHULKER_BOX;
+	}
+
+
+	public static void sendToTypeScript(String eventType, JsonObject data) {
+		if (webSocket != null) {
+			JsonObject jsonMessage = new JsonObject();
+			jsonMessage.addProperty("eventType", eventType);
+			jsonMessage.add("data", data);
+			String message = jsonMessage.toString();
+			webSocket.sendText(message, true);
+		} else {
+			// LOGGER.warn("WebSocket is null, cannot send message to Denorite: " + eventType);
+		}
+	}
+
+	private void handleIncomingMessage(String message) {
+		if (message == null || message.trim().isEmpty()) {
+			LOGGER.warn("Received empty message");
+			return;
+		}
+
+		try {
+			JsonObject jsonMessage = gson.fromJson(message, JsonObject.class);
+			if (!jsonMessage.has("id") || !jsonMessage.has("type")) {
+				LOGGER.warn("Received malformed message without required fields: " + message);
+				return;
+			}
+
+			String id = jsonMessage.get("id").getAsString();
+			String type = jsonMessage.get("type").getAsString();
+			JsonElement dataElement = jsonMessage.get("data");
+
+			JsonObject response = new JsonObject();
+			response.addProperty("id", id);
+
+			try {
+				String result = "";
+				switch (type) {
+					case "command":
+						result = executeCommand(dataElement.getAsString());
+						break;
+					case "chat":
+						broadcastMessage(dataElement.getAsString());
+						result = "Message broadcasted";
+						break;
+					case "bluemap":
+						BlueMapIntegration.handleMarkerCommand(dataElement.getAsJsonObject());
+						result = "Bluemap marker command executed";
+						break;
+					case "register_command":
+						DynamicCommandHandler.confirmReconnect();
+						DynamicCommandHandler.registerCommand(dataElement.getAsJsonObject());
+						result = "Command registered. Restart the server to apply changes.";
+						break;
+					case "unregister_command":
+						DynamicCommandHandler.unregisterCommand(dataElement.getAsString());
+						result = "Command unregistered. Restart the server to apply changes.";
+						break;
+					case "clear_commands":
+						DynamicCommandHandler.clearCommands();
+						result = "All custom commands cleared. Restart the server to apply changes.";
+						break;
+					case "files":
+						result = FileSystemHandler.handleFileCommand(
+								dataElement.getAsJsonObject().get("subcommand").getAsString(),
+								dataElement.getAsJsonObject().get("arguments").getAsJsonObject()
+						).toString();
+						break;
+					default:
+						LOGGER.info("Unknown message type: " + type);
+						response.addProperty("error", "Unknown message type");
+						result = "Error: Unknown message type";
+				}
+				response.addProperty("result", result);
+			} catch (Exception e) {
+				LOGGER.error("Error executing command: " + e.getMessage());
+				response.addProperty("error", e.getMessage());
+			}
+
+			if (webSocket != null) {
+				String responseString = response.toString();
+//				LOGGER.info("← " + responseString);
+				webSocket.sendText(responseString, true);
+			}
+		} catch (JsonSyntaxException e) {
+			LOGGER.error("JSON parsing error: " + e.getMessage());
+			LOGGER.error("Problematic message: " + message);
+		} catch (Exception e) {
+			LOGGER.error("Error handling message: " + e.getMessage());
+			LOGGER.error("Message content: " + message);
+		}
+	}
+
+	private String executeCommand(String command) {
+		if (server != null) {
+			try {
+				StringBuilder output = new StringBuilder();
+				ServerCommandSource source = server.getCommandSource().withOutput(new CommandOutput() {
+					@Override
+					public void sendMessage(Text message) {
+						output.append(message.getString()).append("\n");
+					}
+
+					@Override
+					public boolean shouldReceiveFeedback() {
+						return true;
+					}
+
+					@Override
+					public boolean shouldTrackOutput() {
+						return true;
+					}
+
+					@Override
+					public boolean shouldBroadcastConsoleToOps() {
+						return false;
+					}
+				});
+
+				server.getCommandManager().executeWithPrefix(source, command);
+
+				LOGGER.info(command);
+
+				return output.toString().trim();
+			} catch (Exception e) {
+				LOGGER.error("Error executing command: " + e.getMessage());
+				return "Error: " + e.getMessage();
+			}
+		}
+		return "Error: Server is null";
+	}
+
+	/**
+	 * Execute a command using ServerWorld's command execution
+	 */
+	public static void executeWorldCommand(ServerWorld world, BlockPos pos, String command) {
+		world.getServer().getCommandManager().executeWithPrefix(
+				createCommandSource(world, pos),
+				command
+		);
+	}
+
+	/**
+	 * Create a command source at a specific position
+	 */
+	private static ServerCommandSource createCommandSource(ServerWorld world, BlockPos pos) {
+		return new ServerCommandSource(
+				world.getServer(),
+				new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5),
+				Vec2f.ZERO,
+				world,
+				2, // Command level (2 is for command blocks)
+				"CommandBlock",
+				Text.literal("CommandBlock"),
+				world.getServer(),
+				null
+		);
+	}
+
+	private void broadcastMessage(String message) {
+		if (server != null) {
+			server.getPlayerManager().broadcast(Text.of(message), false);
+		}
 	}
 
 	private void registerServerEvents() {
@@ -367,21 +518,6 @@ public class Denorite implements ModInitializer {
 
 		ServerWorldEvents.UNLOAD.register((server, world) ->
 				sendToTypeScript("world_unload", serializeWorld(world)));
-	}
-
-	private void registerItemEvents() {
-		ServerPlayNetworking.registerGlobalReceiver(new Identifier("minecraft:click_slot"), (server, player, handler, buf, responseSender) -> {
-			sendToTypeScript("inventory_slot_click", serializeInventoryChange(player));
-		});
-
-		// Track item drops
-		ServerPlayNetworking.registerGlobalReceiver(new Identifier("minecraft:drop_item"), (server, player, handler, buf, responseSender) -> {
-			ItemStack droppedItem = player.getMainHandStack();
-			JsonObject data = new JsonObject();
-			data.addProperty("playerId", player.getUuidAsString());
-			data.add("item", serializeItemStack(droppedItem));
-			sendToTypeScript("item_dropped", data);
-		});
 	}
 
 	private void registerChatEvents() {
@@ -737,152 +873,4 @@ public class Denorite implements ModInitializer {
 		return data;
 	}
 
-	public static void sendToTypeScript(String eventType, JsonObject data) {
-		if (webSocket != null) {
-			JsonObject jsonMessage = new JsonObject();
-			jsonMessage.addProperty("eventType", eventType);
-			jsonMessage.add("data", data);
-			String message = jsonMessage.toString();
-			webSocket.sendText(message, true);
-		} else {
-			LOGGER.warn("WebSocket is null, cannot send message to Denorite: " + eventType);
-		}
-	}
-
-	private void handleIncomingMessage(String message) {
-		try {
-			JsonObject jsonMessage = gson.fromJson(message, JsonObject.class);
-			String id = jsonMessage.get("id").getAsString();
-			String type = jsonMessage.get("type").getAsString();
-			JsonElement dataElement = jsonMessage.get("data");
-
-			JsonObject response = new JsonObject();
-			response.addProperty("id", id);
-
-//			LOGGER.info("→ " + message);
-
-			try {
-				String result = "";
-				switch (type) {
-					case "command":
-						result = executeCommand(dataElement.getAsString());
-						break;
-					case "setblock":
-						LOGGER.info(jsonMessage.toString());
-						result = SetBlockCommand.execute(server, dataElement.getAsJsonObject());
-						break;
-					case "chat":
-						broadcastMessage(dataElement.getAsString());
-						result = "Message broadcasted";
-						break;
-					case "bluemap":
-						BlueMapIntegration.handleMarkerCommand(dataElement.getAsJsonObject());
-						result = "Bluemap marker command executed";
-						break;
-					case "register_command":
-						DynamicCommandHandler.confirmReconnect();
-						DynamicCommandHandler.registerCommand(dataElement.getAsJsonObject());
-						result = "Command registered. Restart the server to apply changes.";
-						break;
-					case "unregister_command":
-						DynamicCommandHandler.unregisterCommand(dataElement.getAsString());
-						result = "Command unregistered. Restart the server to apply changes.";
-						break;
-					case "clear_commands":
-						DynamicCommandHandler.clearCommands();
-						result = "All custom commands cleared. Restart the server to apply changes.";
-						break;
-					default:
-						LOGGER.info("Unknown message type: " + type);
-						response.addProperty("error", "Unknown message type");
-						result = "Error: Unknown message type";
-				}
-				response.addProperty("result", result);
-			} catch (Exception e) {
-				LOGGER.error("Error executing command: " + e.getMessage());
-				response.addProperty("error", e.getMessage());
-			}
-
-			if (webSocket != null) {
-				String responseString = response.toString();
-//				LOGGER.info("← " + responseString);
-				webSocket.sendText(responseString, true);
-			}
-		} catch (Exception e) {
-			LOGGER.error("Error handling incoming message: " + e.getMessage());
-			LOGGER.error(message);
-		}
-	}
-
-	private String executeCommand(String command) {
-		if (server != null) {
-			try {
-				StringBuilder output = new StringBuilder();
-				ServerCommandSource source = server.getCommandSource().withOutput(new CommandOutput() {
-					@Override
-					public void sendMessage(Text message) {
-						output.append(message.getString()).append("\n");
-					}
-
-					@Override
-					public boolean shouldReceiveFeedback() {
-						return true;
-					}
-
-					@Override
-					public boolean shouldTrackOutput() {
-						return true;
-					}
-
-					@Override
-					public boolean shouldBroadcastConsoleToOps() {
-						return false;
-					}
-				});
-
-				server.getCommandManager().executeWithPrefix(source, command);
-
-				LOGGER.info(command);
-
-				return output.toString().trim();
-			} catch (Exception e) {
-				LOGGER.error("Error executing command: " + e.getMessage());
-				return "Error: " + e.getMessage();
-			}
-		}
-		return "Error: Server is null";
-	}
-
-	/**
-	 * Execute a command using ServerWorld's command execution
-	 */
-	public static void executeWorldCommand(ServerWorld world, BlockPos pos, String command) {
-		world.getServer().getCommandManager().executeWithPrefix(
-				createCommandSource(world, pos),
-				command
-		);
-	}
-
-	/**
-	 * Create a command source at a specific position
-	 */
-	private static ServerCommandSource createCommandSource(ServerWorld world, BlockPos pos) {
-		return new ServerCommandSource(
-				world.getServer(),
-				new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5),
-				Vec2f.ZERO,
-				world,
-				2, // Command level (2 is for command blocks)
-				"CommandBlock",
-				Text.literal("CommandBlock"),
-				world.getServer(),
-				null
-		);
-	}
-
-	private void broadcastMessage(String message) {
-		if (server != null) {
-			server.getPlayerManager().broadcast(Text.of(message), false);
-		}
-	}
 }

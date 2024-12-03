@@ -17,8 +17,12 @@ import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 
 import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
 import java.util.Map;
+
+import static com.denorite.Denorite.LOGGER;
 
 public class DynamicCommandHandler {
     private static final Map<String, JsonObject> registeredCommands = new HashMap<>();
@@ -33,46 +37,67 @@ public class DynamicCommandHandler {
     }
 
     public static void handleReconnect() {
-        // Store current commands for comparison
         previousCommands = new HashMap<>(registeredCommands);
         isReconnecting = true;
-        Denorite.LOGGER.info("Preparing for reconnection, maintaining command file until connection confirmed");
+        LOGGER.info("Preparing for reconnection, maintaining command file until connection confirmed");
     }
 
     public static void confirmReconnect() {
         if (isReconnecting) {
             registeredCommands.clear();
-            saveCommands(); // Now we clear the JSON file
-            Denorite.LOGGER.info("Connection confirmed, cleared commands file");
+            saveCommands();
+            LOGGER.info("Connection confirmed, cleared commands file");
             isReconnecting = false;
         }
     }
 
     private static void loadCommands() {
         File file = new File(COMMANDS_FILE);
-        if (file.exists()) {
-            try (Reader reader = new FileReader(file)) {
-                JsonElement jsonElement = JsonParser.parseReader(reader);
-                if (jsonElement.isJsonArray()) {
-                    JsonArray jsonArray = jsonElement.getAsJsonArray();
-                    for (JsonElement element : jsonArray) {
-                        if (element.isJsonObject()) {
-                            JsonObject commandData = element.getAsJsonObject();
-                            String name = commandData.get("name").getAsString();
-                            registeredCommands.put(name, commandData);
-                        }
-                    }
-                    Denorite.LOGGER.info("Loaded " + registeredCommands.size() + " custom commands");
-                } else {
-                    Denorite.LOGGER.warn("Command file is not a valid JSON array. No commands loaded.");
-                }
-            } catch (IOException e) {
-                Denorite.LOGGER.error("Error loading commands: " + e.getMessage());
-            } catch (JsonParseException e) {
-                Denorite.LOGGER.error("Error parsing command file: " + e.getMessage());
+        if (!file.exists()) {
+            LOGGER.info("Command file does not exist. Creating a new one.");
+            saveCommands();
+            return;
+        }
+
+        try {
+            String content = Files.readString(file.toPath());
+            if (content.trim().isEmpty()) {
+                LOGGER.info("Empty command file, initializing new one");
+                saveCommands();
+                return;
             }
-        } else {
-            Denorite.LOGGER.info("Command file does not exist. Creating a new one.");
+
+            JsonArray jsonArray = JsonParser.parseString(content).getAsJsonArray();
+            registeredCommands.clear();
+
+            for (JsonElement element : jsonArray) {
+                try {
+                    if (element.isJsonObject()) {
+                        JsonObject commandData = element.getAsJsonObject();
+                        String name = commandData.get("name").getAsString();
+                        registeredCommands.put(name, commandData);
+                    }
+                } catch (Exception e) {
+                    LOGGER.error("Error parsing command: " + e.getMessage());
+                }
+            }
+
+            LOGGER.info("Loaded " + registeredCommands.size() + " custom commands");
+        } catch (Exception e) {
+            LOGGER.error("Error loading commands: " + e.getMessage(), e);
+            // Create backup of problematic file
+            if (file.exists()) {
+                try {
+                    Files.copy(file.toPath(),
+                            file.toPath().resolveSibling("custom_commands.json.backup"),
+                            StandardCopyOption.REPLACE_EXISTING);
+                    LOGGER.info("Created backup of problematic commands file");
+                } catch (IOException backupError) {
+                    LOGGER.error("Failed to create backup: " + backupError.getMessage());
+                }
+            }
+            // Reset commands
+            registeredCommands.clear();
             saveCommands();
         }
     }
@@ -84,9 +109,8 @@ public class DynamicCommandHandler {
                 jsonArray.add(commandData);
             }
             gson.toJson(jsonArray, writer);
-//            Denorite.LOGGER.info("Saved " + registeredCommands.size() + " custom commands");
         } catch (IOException e) {
-            Denorite.LOGGER.error("Error saving commands: " + e.getMessage());
+            LOGGER.error("Error saving commands: " + e.getMessage());
         }
     }
 
@@ -96,20 +120,37 @@ public class DynamicCommandHandler {
                 String commandName = entry.getKey();
                 JsonObject commandData = entry.getValue();
 
-                LiteralArgumentBuilder<ServerCommandSource> command = CommandManager.literal(commandName);
+                // Only create base command if it has direct arguments or no subcommands
+                boolean shouldRegisterBase = !commandData.has("subcommands") ||
+                        (commandData.has("arguments") && commandData.getAsJsonArray("arguments").size() > 0);
 
+                if (shouldRegisterBase) {
+                    LiteralArgumentBuilder<ServerCommandSource> command = CommandManager.literal(commandName);
+                    command.executes(context -> executeCommand(context, commandData, commandName, null));
+
+                    if (commandData.has("arguments")) {
+                        addArguments(command, commandData, commandName, null, registryAccess);
+                    }
+
+                    dispatcher.register(command);
+                    LOGGER.info("Registered command: " + commandName);
+                }
+
+                // Register subcommands separately
                 if (commandData.has("subcommands")) {
                     JsonArray subcommands = commandData.getAsJsonArray("subcommands");
                     for (JsonElement subcommandElement : subcommands) {
                         JsonObject subcommand = subcommandElement.getAsJsonObject();
-                        command.then(addSubcommand(subcommand, commandName, registryAccess));
-                    }
-                } else {
-                    addArguments(command, commandData, commandName, null, registryAccess);
-                }
+                        String subcommandName = subcommand.get("name").getAsString();
 
-                dispatcher.register(command);
-                Denorite.LOGGER.info("Registered command: " + commandName);
+                        // Create the full command path
+                        LiteralArgumentBuilder<ServerCommandSource> fullCommand = CommandManager.literal(commandName)
+                                .then(addSubcommand(subcommand, commandName, registryAccess));
+
+                        dispatcher.register(fullCommand);
+                        LOGGER.info("Registered subcommand: " + commandName + " " + subcommandName);
+                    }
+                }
             }
         });
     }
@@ -117,21 +158,29 @@ public class DynamicCommandHandler {
     private static LiteralArgumentBuilder<ServerCommandSource> addSubcommand(JsonObject subcommand, String commandName, CommandRegistryAccess registryAccess) {
         String subcommandName = subcommand.get("name").getAsString();
         LiteralArgumentBuilder<ServerCommandSource> subcommandBuilder = CommandManager.literal(subcommandName);
-        addArguments(subcommandBuilder, subcommand, commandName, subcommandName, registryAccess);
+
+        // Add execution for subcommand without arguments
+        subcommandBuilder.executes(context -> executeCommand(context, subcommand, commandName, subcommandName));
+
+        // Add arguments if they exist
+        if (subcommand.has("arguments")) {
+            addArguments(subcommandBuilder, subcommand, commandName, subcommandName, registryAccess);
+        }
+
         return subcommandBuilder;
     }
 
-    private static void addArguments(ArgumentBuilder<ServerCommandSource, ?> builder, JsonObject commandData, String commandName, String subcommandName, CommandRegistryAccess registryAccess) {
+    private static void addArguments(ArgumentBuilder<ServerCommandSource, ?> builder, JsonObject commandData,
+                                     String commandName, String subcommandName, CommandRegistryAccess registryAccess) {
         if (commandData.has("arguments")) {
             JsonArray arguments = commandData.getAsJsonArray("arguments");
             addArgumentsRecursive(builder, arguments, 0, commandData, commandName, subcommandName, registryAccess);
-        } else {
-            builder.executes(context -> executeCommand(context, commandData, commandName, subcommandName));
         }
     }
 
-    private static void addArgumentsRecursive(ArgumentBuilder<ServerCommandSource, ?> builder, JsonArray arguments, int index,
-                                              JsonObject commandData, String commandName, String subcommandName, CommandRegistryAccess registryAccess) {
+    private static void addArgumentsRecursive(ArgumentBuilder<ServerCommandSource, ?> builder, JsonArray arguments,
+                                              int index, JsonObject commandData, String commandName,
+                                              String subcommandName, CommandRegistryAccess registryAccess) {
         if (index >= arguments.size()) {
             builder.executes(context -> executeCommand(context, commandData, commandName, subcommandName));
             return;
@@ -141,7 +190,7 @@ public class DynamicCommandHandler {
         String argName = arg.get("name").getAsString();
         String argType = arg.get("type").getAsString();
 
-        ArgumentBuilder<ServerCommandSource, ?> argument = switch (argType) {
+        RequiredArgumentBuilder<ServerCommandSource, ?> argument = switch (argType) {
             case "string" -> CommandManager.argument(argName, StringArgumentType.string());
             case "integer" -> CommandManager.argument(argName, IntegerArgumentType.integer());
             case "player" -> CommandManager.argument(argName, EntityArgumentType.player());
@@ -153,7 +202,8 @@ public class DynamicCommandHandler {
         builder.then(argument);
     }
 
-    private static int executeCommand(CommandContext<ServerCommandSource> context, JsonObject commandData, String commandName, String subcommandName) {
+    private static int executeCommand(CommandContext<ServerCommandSource> context, JsonObject commandData,
+                                      String commandName, String subcommandName) {
         ServerCommandSource source = context.getSource();
 
         JsonObject executionData = new JsonObject();
@@ -188,7 +238,7 @@ public class DynamicCommandHandler {
                         default -> args.addProperty(argName, context.getArgument(argName, String.class));
                     }
                 } catch (Exception e) {
-                    Denorite.LOGGER.warn("Failed to get argument " + argName + ": " + e.getMessage());
+                    // Skip arguments that don't exist in this context
                 }
             }
             executionData.add("arguments", args);
@@ -207,31 +257,38 @@ public class DynamicCommandHandler {
 
         if (Denorite.server != null) {
             if (previousCommand == null || !previousCommand.toString().equals(commandData.toString())) {
-                Denorite.server.getCommandManager().getDispatcher().register(
-                        CommandManager.literal(name).executes(context -> {
-                            context.getSource().sendFeedback(() -> Text.of("Command registered. Please restart the server to use it."), false);
-                            return 1;
-                        })
-                );
-                Denorite.LOGGER.info("Dynamically registered placeholder for command: " + name);
-                Denorite.LOGGER.info("Restart the server to fully register the command with all its arguments and subcommands.");
+                // Only register if it has no subcommands or is a complete command path
+                boolean shouldRegisterBase = !commandData.has("subcommands") ||
+                        (commandData.has("arguments") && commandData.getAsJsonArray("arguments").size() > 0);
+
+                if (shouldRegisterBase) {
+                    LiteralArgumentBuilder<ServerCommandSource> command = CommandManager.literal(name)
+                            .executes(context -> {
+                                context.getSource().sendFeedback(() -> Text.of("Command registered. Please restart the server to use it."), false);
+                                return 1;
+                            });
+
+                    Denorite.server.getCommandManager().getDispatcher().register(command);
+                    LOGGER.info("Dynamically registered placeholder for command: " + name);
+                    LOGGER.info("Restart the server to fully register the command with all its arguments and subcommands.");
+                } else {
+                    LOGGER.info("Skipping base command registration for: " + name + " as it only contains subcommands");
+                }
             } else {
-                Denorite.LOGGER.info("Command already exists with same structure, maintaining registration: " + name);
+                LOGGER.info("Command already exists with same structure, maintaining registration: " + name);
             }
-        } else {
-            Denorite.LOGGER.warn("Server not yet initialized. Command will be registered on next server start: " + name);
         }
     }
 
     public static void unregisterCommand(String name) {
         registeredCommands.remove(name);
         saveCommands();
-        Denorite.LOGGER.info("Unregistered custom command: " + name);
+        LOGGER.info("Unregistered custom command: " + name);
     }
 
     public static void clearCommands() {
         registeredCommands.clear();
         saveCommands();
-        Denorite.LOGGER.info("Cleared all custom commands");
+        LOGGER.info("Cleared all custom commands");
     }
 }

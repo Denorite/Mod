@@ -42,7 +42,7 @@ public class DenoriteConfig {
         JsonObject defaultConfig = new JsonObject();
         defaultConfig.addProperty("jwtToken", "");
         defaultConfig.addProperty("serverUrl", "ws://localhost:8082");
-        defaultConfig.addProperty("mcServerUrl", "http://localhost");
+        defaultConfig.addProperty("mcServerUrl", "localhost");
         defaultConfig.addProperty("strictMode", false);
 
         try {
