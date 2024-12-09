@@ -48,9 +48,8 @@ import net.minecraft.entity.damage.DamageTracker;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
+import java.util.function.Supplier;
 
 public class Denorite implements ModInitializer {
 	public static final String MOD_ID = "Denorite";
@@ -69,6 +68,19 @@ public class Denorite implements ModInitializer {
 	private static Block lastInteractedBlock = null;
 	private static BlockPos lastInteractedPos = null;
 
+	private static final ExecutorService executorService =
+			Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+	// Method to submit tasks
+	public static CompletableFuture<Void> submitTask(Runnable task) {
+		return CompletableFuture.runAsync(task, executorService);
+	}
+
+	// Method to submit tasks with results
+	public static <T> CompletableFuture<T> submitTask(Supplier<T> task) {
+		return CompletableFuture.supplyAsync(task, executorService);
+	}
+
 	@Override
 	public void onInitialize() {
 		LOGGER.info("Initializing Denorite");
@@ -76,7 +88,6 @@ public class Denorite implements ModInitializer {
 		config = new DenoriteConfig();
 		initializeWebSocket();
 		DynamicCommandHandler.initialize();
-		FileSystemHandler.initialize();
 		BlueMapIntegration.initialize();
 		ServerLifecycleEvents.SERVER_STARTING.register(this::setServer);
 		ServerLifecycleEvents.SERVER_STOPPING.register(this::unsetServer);
@@ -85,6 +96,7 @@ public class Denorite implements ModInitializer {
 
 	private void setServer(MinecraftServer minecraftServer) {
 		server = minecraftServer;
+		FileSystemHandler.initialize(server);
 		LOGGER.info("Server reference set in Denorite");
 	}
 
@@ -112,7 +124,7 @@ public class Denorite implements ModInitializer {
 						@Override
 						public void onOpen(WebSocket webSocket) {
 							LOGGER.info("Connected to Denorite Server");
-							DenoriteBanner.printBanner();
+//							DenoriteBanner.printBanner();
 							Denorite.webSocket = webSocket;
 							DynamicCommandHandler.handleReconnect();
 							WebSocket.Listener.super.onOpen(webSocket);
@@ -231,62 +243,94 @@ public class Denorite implements ModInitializer {
 				return;
 			}
 
-			String id = jsonMessage.get("id").getAsString();
-			String type = jsonMessage.get("type").getAsString();
-			JsonElement dataElement = jsonMessage.get("data");
+			// Process each message in its own thread
+			CompletableFuture.runAsync(() -> {
+				String id = jsonMessage.get("id").getAsString();
+				String type = jsonMessage.get("type").getAsString();
+				JsonObject response = new JsonObject();
+				response.addProperty("id", id);
 
-			JsonObject response = new JsonObject();
-			response.addProperty("id", id);
+				try {
+					String result = "";
+					switch (type) {
+						case "command":
+							if (!jsonMessage.has("data")) {
+								throw new IllegalArgumentException("Missing required 'data' field for command");
+							}
+							result = executeCommand(jsonMessage.get("data").getAsString());
+							break;
 
-			try {
-				String result = "";
-				switch (type) {
-					case "command":
-						result = executeCommand(dataElement.getAsString());
-						break;
-					case "chat":
-						broadcastMessage(dataElement.getAsString());
-						result = "Message broadcasted";
-						break;
-					case "bluemap":
-						BlueMapIntegration.handleMarkerCommand(dataElement.getAsJsonObject());
-						result = "Bluemap marker command executed";
-						break;
-					case "register_command":
-						DynamicCommandHandler.confirmReconnect();
-						DynamicCommandHandler.registerCommand(dataElement.getAsJsonObject());
-						result = "Command registered. Restart the server to apply changes.";
-						break;
-					case "unregister_command":
-						DynamicCommandHandler.unregisterCommand(dataElement.getAsString());
-						result = "Command unregistered. Restart the server to apply changes.";
-						break;
-					case "clear_commands":
-						DynamicCommandHandler.clearCommands();
-						result = "All custom commands cleared. Restart the server to apply changes.";
-						break;
-					case "files":
-						result = FileSystemHandler.handleFileCommand(
-								dataElement.getAsJsonObject().get("subcommand").getAsString(),
-								dataElement.getAsJsonObject().get("arguments").getAsJsonObject()
-						).toString();
-						break;
-					default:
-						LOGGER.info("Unknown message type: " + type);
-						response.addProperty("error", "Unknown message type");
-						result = "Error: Unknown message type";
+						case "chat":
+							if (!jsonMessage.has("data")) {
+								throw new IllegalArgumentException("Missing required 'data' field for chat");
+							}
+							broadcastMessage(jsonMessage.get("data").getAsString());
+							result = "Message broadcasted";
+							break;
+
+						case "bluemap":
+							LOGGER.warn(message);
+							if (!jsonMessage.has("data") || !jsonMessage.get("data").isJsonObject()) {
+								throw new IllegalArgumentException("Missing or invalid 'data' field for bluemap");
+							}
+							BlueMapIntegration.handleMarkerCommand(jsonMessage.get("data").getAsJsonObject());
+							result = "Bluemap marker command executed";
+							break;
+
+						case "register_command":
+							if (!jsonMessage.has("data") || !jsonMessage.get("data").isJsonObject()) {
+								throw new IllegalArgumentException("Missing or invalid 'data' field for register_command");
+							}
+							DynamicCommandHandler.confirmReconnect();
+							DynamicCommandHandler.registerCommand(jsonMessage.get("data").getAsJsonObject());
+							result = "Command registered. Restart the server to apply changes.";
+							break;
+
+						case "unregister_command":
+							if (!jsonMessage.has("data")) {
+								throw new IllegalArgumentException("Missing required 'data' field for unregister_command");
+							}
+							DynamicCommandHandler.unregisterCommand(jsonMessage.get("data").getAsString());
+							result = "Command unregistered. Restart the server to apply changes.";
+							break;
+
+						case "clear_commands":
+							DynamicCommandHandler.clearCommands();
+							result = "All custom commands cleared. Restart the server to apply changes.";
+							break;
+
+						case "files":
+							if (!jsonMessage.has("subcommand")) {
+								throw new IllegalArgumentException("Files command requires 'subcommand' field");
+							}
+							if (!jsonMessage.has("arguments") || !jsonMessage.get("arguments").isJsonObject()) {
+								throw new IllegalArgumentException("Files command requires 'arguments' field");
+							}
+							result = FileSystemHandler.handleFileCommand(
+									jsonMessage.get("subcommand").getAsString(),
+									jsonMessage.get("arguments").getAsJsonObject()
+							).toString();
+							break;
+
+						default:
+							LOGGER.warn("Unknown message type: " + type);
+							throw new IllegalArgumentException("Unknown message type: " + type);
+					}
+					response.addProperty("result", result);
+				} catch (Exception e) {
+					LOGGER.error("Error executing command: " + e.getMessage());
+					response.addProperty("error", e.getMessage());
 				}
-				response.addProperty("result", result);
-			} catch (Exception e) {
-				LOGGER.error("Error executing command: " + e.getMessage());
-				response.addProperty("error", e.getMessage());
-			}
 
-			if (webSocket != null) {
-				String responseString = response.toString();
-//				LOGGER.info("← " + responseString);
-				webSocket.sendText(responseString, true);
-			}
+				// Send response synchronously to ensure order
+				synchronized (webSocket) {
+					if (webSocket != null) {
+						String responseString = response.toString();
+						webSocket.sendText(responseString, true);
+					}
+				}
+			});
+
 		} catch (JsonSyntaxException e) {
 			LOGGER.error("JSON parsing error: " + e.getMessage());
 			LOGGER.error("Problematic message: " + message);

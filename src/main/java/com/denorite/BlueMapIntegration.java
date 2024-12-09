@@ -150,28 +150,58 @@ public class BlueMapIntegration {
             return;
         }
 
-        String subcommand = data.get("subcommand").getAsString();
-        JsonObject args = data.get("arguments").getAsJsonObject();
+        try {
+            if (!data.has("subcommand") || !data.has("arguments")) {
+                throw new IllegalArgumentException("Missing required fields: subcommand and/or arguments");
+            }
 
-        switch (subcommand) {
-            case "createSet" -> createMarkerSet(
-                    args.get("id").getAsString(),
-                    args.get("data").getAsString()
-            );
-            case "removeSet" -> removeMarkerSet(
-                    args.get("id").getAsString()
-            );
-            case "listSets" -> listMarkerSets();
-            case "add" -> addMarker(
-                    args.get("markerset").getAsString(),
-                    args.get("markerid").getAsString(),
-                    args.get("type").getAsString(),
-                    args.get("data").getAsString()
-            );
-            case "remove" -> removeMarker(
-                    args.get("markerset").getAsString(),
-                    args.get("markerid").getAsString()
-            );
+            String subcommand = data.get("subcommand").getAsString();
+            JsonObject args = data.get("arguments").getAsJsonObject();
+
+            // Validate data field is present when required
+            switch (subcommand) {
+                case "createSet" -> {
+                    if (!args.has("id") || !args.has("data")) {
+                        throw new IllegalArgumentException("createSet requires id and data fields");
+                    }
+                    createMarkerSet(args.get("id").getAsString(), args.get("data").getAsString());
+                }
+                case "removeSet" -> {
+                    if (!args.has("id")) {
+                        throw new IllegalArgumentException("removeSet requires id field");
+                    }
+                    removeMarkerSet(args.get("id").getAsString());
+                }
+                case "listSets" -> {
+                    listMarkerSets();
+                }
+                case "add" -> {
+                    if (!args.has("markerset") || !args.has("markerid") ||
+                            !args.has("type") || !args.has("data")) {
+                        throw new IllegalArgumentException("add requires markerset, markerid, type, and data fields");
+                    }
+                    addMarker(
+                            args.get("markerset").getAsString(),
+                            args.get("markerid").getAsString(),
+                            args.get("type").getAsString(),
+                            args.get("data").getAsString()
+                    );
+                }
+                case "remove" -> {
+                    if (!args.has("markerset") || !args.has("markerid")) {
+                        throw new IllegalArgumentException("remove requires markerset and markerid fields");
+                    }
+                    removeMarker(
+                            args.get("markerset").getAsString(),
+                            args.get("markerid").getAsString()
+                    );
+                }
+                default -> throw new IllegalArgumentException("Unknown subcommand: " + subcommand);
+            }
+        } catch (Exception e) {
+            LOGGER.error("Error in handleMarkerCommand: " + e.getMessage());
+            LOGGER.error("Command data: " + data.toString());
+            throw e;
         }
     }
 
