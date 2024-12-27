@@ -1,25 +1,28 @@
 package com.denorite;
 
+import com.flowpowered.math.vector.Vector3d;
+import com.google.gson.*;
 import de.bluecolored.bluemap.api.BlueMapAPI;
 import de.bluecolored.bluemap.api.markers.*;
 import de.bluecolored.bluemap.api.math.Color;
 import de.bluecolored.bluemap.api.math.Line;
 import de.bluecolored.bluemap.api.math.Shape;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import net.fabricmc.api.ModInitializer;
 import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.math.Vec3d;
-import com.google.gson.*;
 import net.minecraft.server.world.ServerWorld;
-import com.flowpowered.math.vector.Vector3d;
+import net.minecraft.util.math.Vec3d;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-
 public class BlueMapIntegration {
-    private static final Logger LOGGER = LoggerFactory.getLogger("Denorite-BlueMap");
-    private static final Map<String, MarkerSet> markerSets = new ConcurrentHashMap<>();
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(
+        "Denorite-BlueMap"
+    );
+    private static final Map<String, MarkerSet> markerSets =
+        new ConcurrentHashMap<>();
     private static boolean isEnabled = false;
 
     public static void initialize() {
@@ -152,7 +155,9 @@ public class BlueMapIntegration {
 
         try {
             if (!data.has("subcommand") || !data.has("arguments")) {
-                throw new IllegalArgumentException("Missing required fields: subcommand and/or arguments");
+                throw new IllegalArgumentException(
+                    "Missing required fields: subcommand and/or arguments"
+                );
             }
 
             String subcommand = data.get("subcommand").getAsString();
@@ -162,13 +167,20 @@ public class BlueMapIntegration {
             switch (subcommand) {
                 case "createSet" -> {
                     if (!args.has("id") || !args.has("data")) {
-                        throw new IllegalArgumentException("createSet requires id and data fields");
+                        throw new IllegalArgumentException(
+                            "createSet requires id and data fields"
+                        );
                     }
-                    createMarkerSet(args.get("id").getAsString(), args.get("data").getAsString());
+                    createMarkerSet(
+                        args.get("id").getAsString(),
+                        args.get("data").getAsString()
+                    );
                 }
                 case "removeSet" -> {
                     if (!args.has("id")) {
-                        throw new IllegalArgumentException("removeSet requires id field");
+                        throw new IllegalArgumentException(
+                            "removeSet requires id field"
+                        );
                     }
                     removeMarkerSet(args.get("id").getAsString());
                 }
@@ -176,27 +188,37 @@ public class BlueMapIntegration {
                     listMarkerSets();
                 }
                 case "add" -> {
-                    if (!args.has("markerset") || !args.has("markerid") ||
-                            !args.has("type") || !args.has("data")) {
-                        throw new IllegalArgumentException("add requires markerset, markerid, type, and data fields");
+                    if (
+                        !args.has("markerset") ||
+                        !args.has("markerid") ||
+                        !args.has("type") ||
+                        !args.has("data")
+                    ) {
+                        throw new IllegalArgumentException(
+                            "add requires markerset, markerid, type, and data fields"
+                        );
                     }
                     addMarker(
-                            args.get("markerset").getAsString(),
-                            args.get("markerid").getAsString(),
-                            args.get("type").getAsString(),
-                            args.get("data").getAsString()
+                        args.get("markerset").getAsString(),
+                        args.get("markerid").getAsString(),
+                        args.get("type").getAsString(),
+                        args.get("data").getAsString()
                     );
                 }
                 case "remove" -> {
                     if (!args.has("markerset") || !args.has("markerid")) {
-                        throw new IllegalArgumentException("remove requires markerset and markerid fields");
+                        throw new IllegalArgumentException(
+                            "remove requires markerset and markerid fields"
+                        );
                     }
                     removeMarker(
-                            args.get("markerset").getAsString(),
-                            args.get("markerid").getAsString()
+                        args.get("markerset").getAsString(),
+                        args.get("markerid").getAsString()
                     );
                 }
-                default -> throw new IllegalArgumentException("Unknown subcommand: " + subcommand);
+                default -> throw new IllegalArgumentException(
+                    "Unknown subcommand: " + subcommand
+                );
             }
         } catch (Exception e) {
             LOGGER.error("Error in handleMarkerCommand: " + e.getMessage());
@@ -207,28 +229,46 @@ public class BlueMapIntegration {
 
     private static void createMarkerSet(String id, String markerSetData) {
         try {
-            BlueMapAPI.getInstance().ifPresent(api -> {
-                JsonObject data = JsonParser.parseString(markerSetData).getAsJsonObject();
+            BlueMapAPI.getInstance()
+                .ifPresent(api -> {
+                    JsonObject data = JsonParser.parseString(
+                        markerSetData
+                    ).getAsJsonObject();
 
-                MarkerSet set = MarkerSet.builder()
-                        .label(data.has("label") ? data.get("label").getAsString() : id)
-                        .toggleable(data.has("toggleable") ? data.get("toggleable").getAsBoolean() : true)
-                        .defaultHidden(data.has("defaultHidden") ? data.get("defaultHidden").getAsBoolean() : false)
+                    MarkerSet set = MarkerSet.builder()
+                        .label(
+                            data.has("label")
+                                ? data.get("label").getAsString()
+                                : id
+                        )
+                        .toggleable(
+                            data.has("toggleable")
+                                ? data.get("toggleable").getAsBoolean()
+                                : true
+                        )
+                        .defaultHidden(
+                            data.has("defaultHidden")
+                                ? data.get("defaultHidden").getAsBoolean()
+                                : false
+                        )
                         .build();
 
-                markerSets.put(id, set);
+                    markerSets.put(id, set);
 
-                api.getWorlds().forEach(world ->
-                        world.getMaps().forEach(map ->
-                                map.getMarkerSets().put(id, set)
-                        )
-                );
+                    api
+                        .getWorlds()
+                        .forEach(world ->
+                            world
+                                .getMaps()
+                                .forEach(map -> map.getMarkerSets().put(id, set)
+                                )
+                        );
 
-                JsonObject response = new JsonObject();
-                response.addProperty("id", id);
-                response.addProperty("label", set.getLabel());
-                Denorite.sendToTypeScript("bluemap_set_created", response);
-            });
+                    JsonObject response = new JsonObject();
+                    response.addProperty("id", id);
+                    response.addProperty("label", set.getLabel());
+                    Denorite.sendToTypeScript("bluemap_set_created", response);
+                });
         } catch (Exception e) {
             LOGGER.error("Error creating marker set: " + e.getMessage());
         }
@@ -237,17 +277,20 @@ public class BlueMapIntegration {
     private static void removeMarkerSet(String id) {
         MarkerSet set = markerSets.remove(id);
         if (set != null) {
-            BlueMapAPI.getInstance().ifPresent(api -> {
-                api.getWorlds().forEach(world ->
-                        world.getMaps().forEach(map ->
-                                map.getMarkerSets().remove(id)
-                        )
-                );
+            BlueMapAPI.getInstance()
+                .ifPresent(api -> {
+                    api
+                        .getWorlds()
+                        .forEach(world ->
+                            world
+                                .getMaps()
+                                .forEach(map -> map.getMarkerSets().remove(id))
+                        );
 
-                JsonObject response = new JsonObject();
-                response.addProperty("id", id);
-                Denorite.sendToTypeScript("bluemap_set_removed", response);
-            });
+                    JsonObject response = new JsonObject();
+                    response.addProperty("id", id);
+                    Denorite.sendToTypeScript("bluemap_set_removed", response);
+                });
         }
     }
 
@@ -265,32 +308,53 @@ public class BlueMapIntegration {
         Denorite.sendToTypeScript("bluemap_sets", sets.getAsJsonObject());
     }
 
-    private static void addMarker(String markerSetId, String markerId, String type, String markerData) {
+    private static void addMarker(
+        String markerSetId,
+        String markerId,
+        String type,
+        String markerData
+    ) {
         try {
-            BlueMapAPI.getInstance().ifPresent(api -> {
-                JsonObject data = JsonParser.parseString(markerData).getAsJsonObject();
+            BlueMapAPI.getInstance()
+                .ifPresent(api -> {
+                    JsonObject data = JsonParser.parseString(
+                        markerData
+                    ).getAsJsonObject();
 
-                MarkerSet set = markerSets.computeIfAbsent(markerSetId, id -> {
-                    MarkerSet newSet = MarkerSet.builder()
-                            .label(data.has("setLabel") ? data.get("setLabel").getAsString() : markerSetId)
-                            .toggleable(true)
-                            .defaultHidden(false)
-                            .build();
+                    MarkerSet set = markerSets.computeIfAbsent(
+                        markerSetId,
+                        id -> {
+                            MarkerSet newSet = MarkerSet.builder()
+                                .label(
+                                    data.has("setLabel")
+                                        ? data.get("setLabel").getAsString()
+                                        : markerSetId
+                                )
+                                .toggleable(true)
+                                .defaultHidden(false)
+                                .build();
 
-                    api.getWorlds().forEach(world ->
-                            world.getMaps().forEach(map ->
-                                    map.getMarkerSets().put(markerSetId, newSet)
-                            )
+                            api
+                                .getWorlds()
+                                .forEach(world ->
+                                    world
+                                        .getMaps()
+                                        .forEach(map ->
+                                            map
+                                                .getMarkerSets()
+                                                .put(markerSetId, newSet)
+                                        )
+                                );
+
+                            return newSet;
+                        }
                     );
 
-                    return newSet;
+                    Marker marker = createMarker(type, data);
+                    if (marker != null) {
+                        set.getMarkers().put(markerId, marker);
+                    }
                 });
-
-                Marker marker = createMarker(type, data);
-                if (marker != null) {
-                    set.getMarkers().put(markerId, marker);
-                }
-            });
         } catch (Exception e) {
             LOGGER.error("Error adding marker: " + e.getMessage());
         }
@@ -310,23 +374,45 @@ public class BlueMapIntegration {
     private static POIMarker createPOIMarker(JsonObject data) {
         Vector3d pos = parsePosition(data.get("position").getAsJsonObject());
         return POIMarker.builder()
-                .label(data.get("label").getAsString())
-                .position(pos)
-                .icon(data.has("icon") ? data.get("icon").getAsString() : "assets/poi.svg", 16, 16)
-                .maxDistance(data.has("maxDistance") ? data.get("maxDistance").getAsDouble() : 1000.0)
-                .minDistance(data.has("minDistance") ? data.get("minDistance").getAsDouble() : 0.0)
-                .build();
+            .label(data.get("label").getAsString())
+            .position(pos)
+            .icon(
+                data.has("icon")
+                    ? data.get("icon").getAsString()
+                    : "assets/poi.svg",
+                16,
+                16
+            )
+            .maxDistance(
+                data.has("maxDistance")
+                    ? data.get("maxDistance").getAsDouble()
+                    : 1000.0
+            )
+            .minDistance(
+                data.has("minDistance")
+                    ? data.get("minDistance").getAsDouble()
+                    : 0.0
+            )
+            .build();
     }
 
     private static HtmlMarker createHTMLMarker(JsonObject data) {
         Vector3d pos = parsePosition(data.get("position").getAsJsonObject());
         return HtmlMarker.builder()
-                .label(data.get("label").getAsString())
-                .position(pos)
-                .html(data.get("html").getAsString())
-                .maxDistance(data.has("maxDistance") ? data.get("maxDistance").getAsDouble() : 1000.0)
-                .minDistance(data.has("minDistance") ? data.get("minDistance").getAsDouble() : 0.0)
-                .build();
+            .label(data.get("label").getAsString())
+            .position(pos)
+            .html(data.get("html").getAsString())
+            .maxDistance(
+                data.has("maxDistance")
+                    ? data.get("maxDistance").getAsDouble()
+                    : 1000.0
+            )
+            .minDistance(
+                data.has("minDistance")
+                    ? data.get("minDistance").getAsDouble()
+                    : 0.0
+            )
+            .build();
     }
 
     private static LineMarker createLineMarker(JsonObject data) {
@@ -342,23 +428,35 @@ public class BlueMapIntegration {
         Line line = lineBuilder.build();
 
         return LineMarker.builder()
-                .label(data.get("label").getAsString())
-                .line(line)
-                .lineWidth(data.has("lineWidth") ? data.get("lineWidth").getAsInt() : 2)
-                .maxDistance(data.has("maxDistance") ? data.get("maxDistance").getAsDouble() : 1000.0)
-                .minDistance(data.has("minDistance") ? data.get("minDistance").getAsDouble() : 0.0)
-                .build();
+            .label(data.get("label").getAsString())
+            .line(line)
+            .lineWidth(
+                data.has("lineWidth") ? data.get("lineWidth").getAsInt() : 2
+            )
+            .maxDistance(
+                data.has("maxDistance")
+                    ? data.get("maxDistance").getAsDouble()
+                    : 1000.0
+            )
+            .minDistance(
+                data.has("minDistance")
+                    ? data.get("minDistance").getAsDouble()
+                    : 0.0
+            )
+            .build();
     }
 
     private static ShapeMarker createShapeMarker(JsonObject data) {
         List<Vector3d> points = new ArrayList<>();
         for (JsonElement point : data.get("shape").getAsJsonArray()) {
             JsonObject pos = point.getAsJsonObject();
-            points.add(new Vector3d(
+            points.add(
+                new Vector3d(
                     pos.get("x").getAsDouble(),
                     data.get("shapeY").getAsDouble(),
                     pos.get("z").getAsDouble()
-            ));
+                )
+            );
         }
 
         double minX = Double.MAX_VALUE, minZ = Double.MAX_VALUE;
@@ -375,25 +473,37 @@ public class BlueMapIntegration {
         float shapeY = data.get("shapeY").getAsFloat();
 
         return ShapeMarker.builder()
-                .label(data.get("label").getAsString())
-                .shape(shape, shapeY)
-                .lineColor(parseColor(data.get("lineColor").getAsJsonObject()))
-                .fillColor(parseColor(data.get("fillColor").getAsJsonObject()))
-                .lineWidth(data.has("lineWidth") ? data.get("lineWidth").getAsInt() : 2)
-                .maxDistance(data.has("maxDistance") ? data.get("maxDistance").getAsDouble() : 1000.0)
-                .minDistance(data.has("minDistance") ? data.get("minDistance").getAsDouble() : 0.0)
-                .build();
+            .label(data.get("label").getAsString())
+            .shape(shape, shapeY)
+            .lineColor(parseColor(data.get("lineColor").getAsJsonObject()))
+            .fillColor(parseColor(data.get("fillColor").getAsJsonObject()))
+            .lineWidth(
+                data.has("lineWidth") ? data.get("lineWidth").getAsInt() : 2
+            )
+            .maxDistance(
+                data.has("maxDistance")
+                    ? data.get("maxDistance").getAsDouble()
+                    : 1000.0
+            )
+            .minDistance(
+                data.has("minDistance")
+                    ? data.get("minDistance").getAsDouble()
+                    : 0.0
+            )
+            .build();
     }
 
     private static ExtrudeMarker createExtrudeMarker(JsonObject data) {
         List<Vector3d> points = new ArrayList<>();
         for (JsonElement point : data.get("shape").getAsJsonArray()) {
             JsonObject pos = point.getAsJsonObject();
-            points.add(new Vector3d(
+            points.add(
+                new Vector3d(
                     pos.get("x").getAsDouble(),
                     0,
                     pos.get("z").getAsDouble()
-            ));
+                )
+            );
         }
 
         double minX = Double.MAX_VALUE, minZ = Double.MAX_VALUE;
@@ -411,14 +521,24 @@ public class BlueMapIntegration {
         float maxY = data.get("shapeMaxY").getAsFloat();
 
         return ExtrudeMarker.builder()
-                .label(data.get("label").getAsString())
-                .shape(shape, minY, maxY)
-                .lineColor(parseColor(data.get("lineColor").getAsJsonObject()))
-                .fillColor(parseColor(data.get("fillColor").getAsJsonObject()))
-                .lineWidth(data.has("lineWidth") ? data.get("lineWidth").getAsInt() : 2)
-                .maxDistance(data.has("maxDistance") ? data.get("maxDistance").getAsDouble() : 1000.0)
-                .minDistance(data.has("minDistance") ? data.get("minDistance").getAsDouble() : 0.0)
-                .build();
+            .label(data.get("label").getAsString())
+            .shape(shape, minY, maxY)
+            .lineColor(parseColor(data.get("lineColor").getAsJsonObject()))
+            .fillColor(parseColor(data.get("fillColor").getAsJsonObject()))
+            .lineWidth(
+                data.has("lineWidth") ? data.get("lineWidth").getAsInt() : 2
+            )
+            .maxDistance(
+                data.has("maxDistance")
+                    ? data.get("maxDistance").getAsDouble()
+                    : 1000.0
+            )
+            .minDistance(
+                data.has("minDistance")
+                    ? data.get("minDistance").getAsDouble()
+                    : 0.0
+            )
+            .build();
     }
 
     private static void removeMarker(String markerSetId, String markerId) {
@@ -430,18 +550,21 @@ public class BlueMapIntegration {
 
     private static Vector3d parsePosition(JsonObject pos) {
         return new Vector3d(
-                pos.get("x").getAsDouble(),
-                pos.get("y").getAsDouble(),
-                pos.get("z").getAsDouble()
+            pos.get("x").getAsDouble(),
+            pos.get("y").getAsDouble(),
+            pos.get("z").getAsDouble()
         );
     }
 
     private static Color parseColor(JsonObject color) {
+        int alpha = color.has("a") ? color.get("a").getAsInt() : 255;
+        float normalizedAlpha = alpha / 255f; // Convert to float between 0-1
+
         return new Color(
-                color.get("r").getAsInt() / 255,
-                color.get("g").getAsInt() / 255,
-                color.get("b").getAsInt() / 255,
-                color.has("a") ? color.get("a").getAsFloat() : 1.0f
+                color.get("r").getAsInt(),
+                color.get("g").getAsInt(),
+                color.get("b").getAsInt(),
+                normalizedAlpha
         );
     }
 }

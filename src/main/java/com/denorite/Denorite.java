@@ -97,12 +97,12 @@ public class Denorite implements ModInitializer {
 	private void setServer(MinecraftServer minecraftServer) {
 		server = minecraftServer;
 		FileSystemHandler.initialize(server);
-		LOGGER.info("Server reference set in Denorite");
+//		LOGGER.info("Server reference set in Denorite");
 	}
 
 	private void unsetServer(MinecraftServer minecraftServer) {
 		server = null;
-		LOGGER.info("Server reference unset in Denorite");
+//		LOGGER.info("Server reference unset in Denorite");
 	}
 
 	private void initializeWebSocket() {
@@ -169,6 +169,8 @@ public class Denorite implements ModInitializer {
 			} catch (Exception e) {
 				LOGGER.error("Failed to connect to Denorite: " + e.getMessage());
 				LOGGER.error("Please ensure the Denorite Server is running on " + config.getServerUrl());
+				LOGGER.error("Strict mode: " + config.isStrictMode());
+				LOGGER.error("Server will shut down if no connection and set to true.");
 				handleDisconnect();
 			}
 		} catch (Exception e) {
@@ -186,6 +188,8 @@ public class Denorite implements ModInitializer {
 			}
 		} else {
 			LOGGER.warn("WebSocket disconnected. Attempting to reconnect in " + (RECONNECT_DELAY / 1000) + " seconds.");
+			LOGGER.error("Strict mode: " + config.isStrictMode());
+			LOGGER.error("Server will shut down if no connection and set to true.");
 			CompletableFuture.delayedExecutor(RECONNECT_DELAY, TimeUnit.MILLISECONDS).execute(this::connectWebSocket);
 		}
 	}
@@ -198,9 +202,9 @@ public class Denorite implements ModInitializer {
 		registerChatEvents();
 		registerProjectileEvents();
 		registerAdvancementEvents();
-		registerExperienceEvents();
+//		registerExperienceEvents();
 		registerTradeEvents();
-		registerWeatherEvents();
+//		registerWeatherEvents();
 		registerRedstoneEvents();
 	}
 
@@ -226,7 +230,7 @@ public class Denorite implements ModInitializer {
 			String message = jsonMessage.toString();
 			webSocket.sendText(message, true);
 		} else {
-			// LOGGER.warn("WebSocket is null, cannot send message to Denorite: " + eventType);
+//			 LOGGER.warn("WebSocket is null, cannot send message to Denorite: " + eventType);
 		}
 	}
 
@@ -269,7 +273,6 @@ public class Denorite implements ModInitializer {
 							break;
 
 						case "bluemap":
-							LOGGER.warn(message);
 							if (!jsonMessage.has("data") || !jsonMessage.get("data").isJsonObject()) {
 								throw new IllegalArgumentException("Missing or invalid 'data' field for bluemap");
 							}
@@ -316,6 +319,7 @@ public class Denorite implements ModInitializer {
 							LOGGER.warn("Unknown message type: " + type);
 							throw new IllegalArgumentException("Unknown message type: " + type);
 					}
+					LOGGER.info(result);
 					response.addProperty("result", result);
 				} catch (Exception e) {
 					LOGGER.error("Error executing command: " + e.getMessage());
@@ -368,7 +372,7 @@ public class Denorite implements ModInitializer {
 
 				server.getCommandManager().executeWithPrefix(source, command);
 
-				LOGGER.info(command);
+				LOGGER.debug(command);
 
 				return output.toString().trim();
 			} catch (Exception e) {

@@ -41,9 +41,9 @@ public class DenoriteConfig {
     private void createDefaultConfig(File configFile) {
         JsonObject defaultConfig = new JsonObject();
         defaultConfig.addProperty("jwtToken", "");
-        defaultConfig.addProperty("serverUrl", "ws://localhost:8082");
-        defaultConfig.addProperty("mcServerUrl", "localhost");
-        defaultConfig.addProperty("strictMode", false);
+        defaultConfig.addProperty("serverUrl", "ws://server:8082");
+        defaultConfig.addProperty("mcServerUrl", "mc");
+        defaultConfig.addProperty("strictMode", true);
 
         try {
             FileUtils.write(configFile, new Gson().toJson(defaultConfig), StandardCharsets.UTF_8);

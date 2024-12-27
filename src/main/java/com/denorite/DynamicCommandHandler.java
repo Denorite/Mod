@@ -2,6 +2,8 @@ package com.denorite;
 
 import com.google.gson.*;
 import com.mojang.brigadier.builder.ArgumentBuilder;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
+import com.mojang.brigadier.suggestion.Suggestions;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.CommandRegistryAccess;
 import net.minecraft.command.argument.EntityArgumentType;
@@ -121,8 +123,11 @@ public class DynamicCommandHandler {
                 JsonObject commandData = entry.getValue();
 
                 // Only create base command if it has direct arguments or no subcommands
-                boolean shouldRegisterBase = !commandData.has("subcommands") ||
-                        (commandData.has("arguments") && commandData.getAsJsonArray("arguments").size() > 0);
+                boolean hasSubcommands = commandData.has("subcommands");
+                boolean hasArguments = commandData.has("arguments") &&
+                        !commandData.getAsJsonArray("arguments").isEmpty();
+                boolean isExecutable = !hasSubcommands || hasArguments;  // Can execute if no subcommands or has own arguments
+                boolean shouldRegisterBase = true;  // Always register base command
 
                 if (shouldRegisterBase) {
                     LiteralArgumentBuilder<ServerCommandSource> command = CommandManager.literal(commandName);
@@ -155,12 +160,106 @@ public class DynamicCommandHandler {
         });
     }
 
+    private static void addArguments(ArgumentBuilder<ServerCommandSource, ?> builder, JsonObject commandData,
+                                     String commandName, String subcommandName, CommandRegistryAccess registryAccess) {
+        if (commandData.has("arguments")) {
+            JsonArray arguments = commandData.getAsJsonArray("arguments");
+            addArgumentsRecursive(builder, arguments, 0, commandData, commandName, subcommandName, registryAccess, true);
+        }
+    }
+
+    private static void addArgumentsRecursive(ArgumentBuilder<ServerCommandSource, ?> builder, JsonArray arguments,
+                                              int index, JsonObject commandData, String commandName,
+                                              String subcommandName, CommandRegistryAccess registryAccess, boolean allowPartial) {
+        // Handle case with no arguments
+        if (allowPartial) {
+            builder.executes(context -> executeCommand(context, commandData, commandName, subcommandName));
+        }
+
+        if (index >= arguments.size()) {
+            return;
+        }
+
+        JsonObject arg = arguments.get(index).getAsJsonObject();
+        String argName = arg.get("name").getAsString();
+        String argType = arg.get("type").getAsString();
+        boolean isOptional = arg.has("optional") && arg.get("optional").getAsBoolean();
+
+        // Create argument builder with appropriate type and suggestions
+        RequiredArgumentBuilder<ServerCommandSource, ?> argument = createArgumentBuilder(argName, argType, registryAccess);
+
+        // Add suggestions based on argument type
+        addSuggestions(argument, arg);
+
+        // Handle optional arguments by creating a branch without this argument
+        if (isOptional && allowPartial) {
+            // Create a path that skips this optional argument
+            addArgumentsRecursive(builder, arguments, index + 1, commandData, commandName, subcommandName, registryAccess, true);
+        }
+
+        // Continue with the regular path including this argument
+        addArgumentsRecursive(argument, arguments, index + 1, commandData, commandName, subcommandName, registryAccess, true);
+        builder.then(argument);
+    }
+
+    private static RequiredArgumentBuilder<ServerCommandSource, ?> createArgumentBuilder(String argName, String argType, CommandRegistryAccess registryAccess) {
+        return switch (argType.toLowerCase()) {
+            case "string" -> {
+                // For string arguments, use quoted string to properly handle spaces and quotes
+                yield CommandManager.argument(argName, StringArgumentType.string());
+            }
+            case "text" -> {
+                // For text arguments that need to be greedy (consume rest of line)
+                yield CommandManager.argument(argName, StringArgumentType.greedyString());
+            }
+            case "integer" -> CommandManager.argument(argName, IntegerArgumentType.integer());
+            case "player" -> CommandManager.argument(argName, EntityArgumentType.player());
+            case "item" -> CommandManager.argument(argName, ItemStackArgumentType.itemStack(registryAccess));
+            default -> CommandManager.argument(argName, StringArgumentType.word());
+        };
+    }
+
+    private static void addSuggestions(RequiredArgumentBuilder<ServerCommandSource, ?> argument, JsonObject arg) {
+        String argType = arg.get("type").getAsString();
+        String argName = arg.get("name").getAsString();
+
+        // Custom suggestion provider based on argument type
+        SuggestionProvider<ServerCommandSource> suggestionProvider = (context, builder) -> {
+            switch (argType.toLowerCase()) {
+                case "string":
+                    if (arg.has("suggestions")) {
+                        JsonArray suggestions = arg.getAsJsonArray("suggestions");
+                        for (JsonElement suggestion : suggestions) {
+                            builder.suggest(suggestion.getAsString());
+                        }
+                    }
+                    break;
+
+                case "player":
+                    // Let Minecraft handle player suggestions
+                    return Suggestions.empty();
+
+                case "item":
+                    // Let Minecraft handle item suggestions
+                    return Suggestions.empty();
+            }
+            return builder.buildFuture();
+        };
+
+        // Only add custom suggestions if the argument type needs them
+        if (argType.equals("string") && arg.has("suggestions")) {
+            argument.suggests(suggestionProvider);
+        }
+    }
+
     private static LiteralArgumentBuilder<ServerCommandSource> addSubcommand(JsonObject subcommand, String commandName, CommandRegistryAccess registryAccess) {
         String subcommandName = subcommand.get("name").getAsString();
         LiteralArgumentBuilder<ServerCommandSource> subcommandBuilder = CommandManager.literal(subcommandName);
 
         // Add execution for subcommand without arguments
-        subcommandBuilder.executes(context -> executeCommand(context, subcommand, commandName, subcommandName));
+        if (!subcommand.has("arguments") || subcommand.getAsJsonArray("arguments").size() == 0) {
+            subcommandBuilder.executes(context -> executeCommand(context, subcommand, commandName, subcommandName));
+        }
 
         // Add arguments if they exist
         if (subcommand.has("arguments")) {
@@ -170,37 +269,41 @@ public class DynamicCommandHandler {
         return subcommandBuilder;
     }
 
-    private static void addArguments(ArgumentBuilder<ServerCommandSource, ?> builder, JsonObject commandData,
-                                     String commandName, String subcommandName, CommandRegistryAccess registryAccess) {
-        if (commandData.has("arguments")) {
-            JsonArray arguments = commandData.getAsJsonArray("arguments");
-            addArgumentsRecursive(builder, arguments, 0, commandData, commandName, subcommandName, registryAccess);
+    public static void registerCommand(JsonObject commandData) {
+        String name = commandData.get("name").getAsString();
+
+        LiteralArgumentBuilder<ServerCommandSource> command = CommandManager.literal(name);
+
+        // Add basic command execution if it has no arguments
+        if (!commandData.has("arguments") || commandData.getAsJsonArray("arguments").isEmpty()) {
+            command.executes(context -> {
+                if (commandData.has("description")) {
+                    context.getSource().sendFeedback(() ->
+                            Text.of(commandData.get("description").getAsString()), false);
+                }
+                return 1;
+            });
+        }
+
+        // Add usage information
+        if (commandData.has("usage")) {
+            String usage = commandData.get("usage").getAsString();
+            command.executes(context -> {
+                context.getSource().sendFeedback(() ->
+                        Text.of("Usage: /" + name + " " + usage), false);
+                return 1;
+            });
+        }
+
+        registeredCommands.put(name, commandData);
+        saveCommands();
+
+        if (Denorite.server != null) {
+            Denorite.server.getCommandManager().getDispatcher().register(command);
+            LOGGER.info("Registered command: " + name);
         }
     }
 
-    private static void addArgumentsRecursive(ArgumentBuilder<ServerCommandSource, ?> builder, JsonArray arguments,
-                                              int index, JsonObject commandData, String commandName,
-                                              String subcommandName, CommandRegistryAccess registryAccess) {
-        if (index >= arguments.size()) {
-            builder.executes(context -> executeCommand(context, commandData, commandName, subcommandName));
-            return;
-        }
-
-        JsonObject arg = arguments.get(index).getAsJsonObject();
-        String argName = arg.get("name").getAsString();
-        String argType = arg.get("type").getAsString();
-
-        RequiredArgumentBuilder<ServerCommandSource, ?> argument = switch (argType) {
-            case "string" -> CommandManager.argument(argName, StringArgumentType.string());
-            case "integer" -> CommandManager.argument(argName, IntegerArgumentType.integer());
-            case "player" -> CommandManager.argument(argName, EntityArgumentType.player());
-            case "item" -> CommandManager.argument(argName, ItemStackArgumentType.itemStack(registryAccess));
-            default -> CommandManager.argument(argName, StringArgumentType.word());
-        };
-
-        addArgumentsRecursive(argument, arguments, index + 1, commandData, commandName, subcommandName, registryAccess);
-        builder.then(argument);
-    }
 
     private static int executeCommand(CommandContext<ServerCommandSource> context, JsonObject commandData,
                                       String commandName, String subcommandName) {
@@ -246,38 +349,6 @@ public class DynamicCommandHandler {
 
         Denorite.sendToTypeScript("custom_command_executed", executionData);
         return 1;
-    }
-
-    public static void registerCommand(JsonObject commandData) {
-        String name = commandData.get("name").getAsString();
-        JsonObject previousCommand = previousCommands.get(name);
-
-        registeredCommands.put(name, commandData);
-        saveCommands();
-
-        if (Denorite.server != null) {
-            if (previousCommand == null || !previousCommand.toString().equals(commandData.toString())) {
-                // Only register if it has no subcommands or is a complete command path
-                boolean shouldRegisterBase = !commandData.has("subcommands") ||
-                        (commandData.has("arguments") && commandData.getAsJsonArray("arguments").size() > 0);
-
-                if (shouldRegisterBase) {
-                    LiteralArgumentBuilder<ServerCommandSource> command = CommandManager.literal(name)
-                            .executes(context -> {
-                                context.getSource().sendFeedback(() -> Text.of("Command registered. Please restart the server to use it."), false);
-                                return 1;
-                            });
-
-                    Denorite.server.getCommandManager().getDispatcher().register(command);
-                    LOGGER.info("Dynamically registered placeholder for command: " + name);
-                    LOGGER.info("Restart the server to fully register the command with all its arguments and subcommands.");
-                } else {
-                    LOGGER.info("Skipping base command registration for: " + name + " as it only contains subcommands");
-                }
-            } else {
-                LOGGER.info("Command already exists with same structure, maintaining registration: " + name);
-            }
-        }
     }
 
     public static void unregisterCommand(String name) {
